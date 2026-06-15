@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Daily Manager</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0F0F13; color: #E8E6F0; font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; min-height: 100vh; }
+    #root { max-width: 420px; margin: 0 auto; min-height: 100vh; }
+    input::placeholder { color: #4A475A; }
+    textarea::placeholder { color: #4A475A; }
+    input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.5); cursor: pointer; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #1E1C2A; }
+    ::-webkit-scrollbar-thumb { background: #3D3A50; border-radius: 4px; }
+    @keyframes pulse-ring {
+      0%   { transform: scale(1);   opacity: 0.8; }
+      50%  { transform: scale(1.3); opacity: 0.3; }
+      100% { transform: scale(1);   opacity: 0.8; }
+    }
+    .mic-pulse { animation: pulse-ring 1.2s ease-in-out infinite; }
+    .bottom-nav {
+      position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+      width: 100%; max-width: 420px;
+      background: #1A1825; border-top: 1px solid #2D2A3E;
+      display: flex; justify-content: space-around; align-items: center;
+      padding: 10px 0 20px; z-index: 100;
+    }
+    .nav-btn {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      background: none; border: none; cursor: pointer; padding: 4px 20px;
+      color: #4A475A; font-size: 10px; font-family: inherit; transition: color 0.2s;
+    }
+    .nav-btn.active { color: #4F8EF7; }
+    .nav-icon { font-size: 20px; line-height: 1; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+const KR_HOLIDAYS = {
+  "2025-01-01":"신정","2025-01-27":"설날 임시공휴일","2025-01-28":"설날 전날","2025-01-29":"설날","2025-01-30":"설날 다음날","2025-03-01":"삼일절","2025-03-03":"삼일절 대체공휴일","2025-05-05":"어린이날","2025-05-06":"부처님오신날 대체공휴일","2025-06-03":"대통령선거일","2025-06-06":"현충일","2025-08-15":"광복절","2025-10-03":"개천절","2025-10-05":"추석 전날","2025-10-06":"추석","2025-10-07":"추석 다음날","2025-10-08":"추석 대체공휴일","2025-10-09":"한글날","2025-12-25":"크리스마스","2026-01-01":"신정","2026-02-16":"설날 전날","2026-02-17":"설날","2026-02-18":"설날 다음날","2026-03-01":"삼일절","2026-03-02":"삼일절 대체공휴일","2026-05-05":"어린이날","2026-05-24":"부처님오신날","2026-05-25":"부처님오신날 대체공휴일","2026-06-06":"현충일","2026-08-15":"광복절","2026-08-17":"광복절 대체공휴일","2026-09-24":"추석 전날","2026-09-25":"추석","2026-09-26":"추석 다음날","2026-10-03":"개천절","2026-10-05":"개천절 대체공휴일","2026-10-09":"한글날","2026-12-25":"크리스마스",
+};
+const CATEGORIES = { todo:{label:"할 일",color:"#4F8EF7"}, memo:{label:"메모",color:"#A78BFA"}, reminder:{label:"리마인더",color:"#34D399"} };
+const CONTEXTS = { work:{label:"업무",color:"#F59E0B"}, life:{label:"일상",color:"#EC4899"} };
+const WORK_KW = ["회의","미팅","보고","제출","발주","견적","통관","서류","거래처","클라이언트","계약","출장","박람회","업무","직장","회사","팀","부서","기안","결재","메일","고객"];
+function classifyInput(text) {
+  const todoKw=["해야","하기","할","예정","준비","보내","확인","연락","제출","방문","사야","살"];
+  const reminderKw=["까먹","잊지","알림","기억","시간","시에","오전","오후"];
+  if(reminderKw.some(k=>text.includes(k)))return"reminder";
+  if(todoKw.some(k=>text.includes(k)))return"todo";
+  return"memo";
+}
+function classifyContext(t){return WORK_KW.some(k=>t.includes(k))?"work":"life";}
+function toDateStr(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function isToday(iso){const d=new Date(iso),t=new Date();return d.getFullYear()===t.getFullYear()&&d.getMonth()===t.getMonth()&&d.getDate()===t.getDate();}
+const STORAGE_KEY="daily_manager_v4";
+function loadItems(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY))||[];}catch{return[];}}
+function saveItems(items){localStorage.setItem(STORAGE_KEY,JSON.stringify(items));}
+function useSpeech(onResult){
+  const[listening,setListening]=useState(false);
+  const[supported,setSupported]=useState(false);
+  const recRef=useRef(null);
+  useEffect(()=>{
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(SR){setSupported(true);const rec=new SR();rec.lang="ko-KR";rec.continuous=false;rec.interimResults=false;rec.onresult=(e)=>{onResult(e.results[0][0].transcript);setListening(false);};rec.onerror=()=>setListening(false);rec.onend=()=>setListening(false);recRef.current=rec;}
+  },[]);
+  const toggle=()=>{if(!recRef.current)return;if(listening){recRef.current.stop();setListening(false);}else{recRef.current.start();setListening(true);}};
+  return{listening,supported,toggle};
+}
+function AddModal({onClose,onAdd}){
+  const[text,setText]=useState("");const[dueDate,setDueDate]=useState("");const[cat,setCat]=useState("");const[ctx,setCtx]=useState("");
+  const{listening,supported,toggle}=useSpeech((t)=>setText(prev=>prev?prev+" "+t:t));
+  const submit=()=>{if(!text.trim())return;onAdd({id:Date.now(),text:text.trim(),category:cat||classifyInput(text),context:ctx||classifyContext(text),dueDate:dueDate||null,done:false,createdAt:new Date().toISOString()});onClose();};
+  return(<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:999}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div style={{background:"#1E1C2A",borderRadius:"20px 20px 0 0",padding:"24px 20px 40px",width:"100%",maxWidth:420}}>
+      <div style={{fontSize:16,fontWeight:700,color:"#E8E6F0",marginBottom:16}}>새 항목 추가</div>
+      <div style={{position:"relative",marginBottom:14}}>
+        <textarea value={text} onChange={e=>setText(e.target.value)} placeholder="내용 입력 또는 마이크로 음성 입력..." style={{width:"100%",background:"#0F0F13",border:"1px solid #2D2A3E",borderRadius:12,color:"#E8E6F0",fontSize:14,padding:"12px 48px 12px 12px",outline:"none",resize:"none",height:80}}/>
+        {supported&&<button onClick={toggle} className={listening?"mic-pulse":""} style={{position:"absolute",right:10,top:10,width:32,height:32,borderRadius:"50%",border:"none",cursor:"pointer",background:listening?"#FF6B6B":"#2D2A3E",color:"#fff",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>{listening?"⏹":"🎤"}</button>}
+      </div>
+      {listening&&<div style={{fontSize:11,color:"#FF6B6B",marginBottom:10}}>음성 인식 중... 말씀해 주세요</div>}
+      <div style={{marginBottom:14}}><div style={{fontSize:12,color:"#6B6880",marginBottom:6}}>예정일 (선택)</div><input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} min={toDateStr(new Date())} style={{background:"#0F0F13",border:"1px solid #2D2A3E",borderRadius:10,color:"#E8E6F0",fontSize:13,padding:"8px 12px",outline:"none",width:"100%"}}/></div>
+      <div style={{marginBottom:14}}><div style={{fontSize:12,color:"#6B6880",marginBottom:6}}>업무 / 일상</div><div style={{display:"flex",gap:8}}>{Object.entries(CONTEXTS).map(([key,val])=><button key={key} onClick={()=>setCtx(ctx===key?"":key)} style={{padding:"6px 16px",borderRadius:20,fontSize:12,cursor:"pointer",border:`1px solid ${ctx===key?val.color:"#2D2A3E"}`,background:ctx===key?`${val.color}22`:"transparent",color:ctx===key?val.color:"#6B6880"}}>{val.label}</button>)}</div></div>
+      <div style={{marginBottom:20}}><div style={{fontSize:12,color:"#6B6880",marginBottom:6}}>유형</div><div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{Object.entries(CATEGORIES).map(([key,val])=><button key={key} onClick={()=>setCat(cat===key?"":key)} style={{padding:"6px 16px",borderRadius:20,fontSize:12,cursor:"pointer",border:`1px solid ${cat===key?val.color:"#2D2A3E"}`,background:cat===key?`${val.color}22`:"transparent",color:cat===key?val.color:"#6B6880"}}>{val.label}</button>)}</div></div>
+      <button onClick={submit} style={{width:"100%",padding:"14px",borderRadius:14,border:"none",background:"linear-gradient(135deg,#4F8EF7,#A78BFA)",color:"#fff",fontSize:15,fontWeight:600,cursor:"pointer"}}>추가</button>
+    </div>
+  </div>);
+}
+function ItemCard({item,onToggle,onDelete,onCategory,onContext}){
+  const[expanded,setExpanded]=useState(false);
+  const cat=CATEGORIES[item.category];const ctx=CONTEXTS[item.context];
+  const overdue=item.dueDate&&!item.done&&item.dueDate<toDateStr(new Date());
+  return(<div style={{background:"#1E1C2A",borderRadius:14,padding:"14px 16px",borderLeft:`3px solid ${cat.color}`,opacity:item.done?0.5:1}}>
+    <div style={{display:"flex",alignItems:"flex-start",gap:12}}>
+      <button onClick={onToggle} style={{width:22,height:22,borderRadius:6,flexShrink:0,marginTop:1,border:`2px solid ${item.done?cat.color:"#3D3A50"}`,background:item.done?cat.color:"transparent",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>{item.done&&<span style={{color:"#fff",fontSize:12,fontWeight:700}}>✓</span>}</button>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:14,lineHeight:1.5,wordBreak:"break-word",color:item.done?"#6B6880":"#E8E6F0",textDecoration:item.done?"line-through":"none"}}>{item.text}</div>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginTop:6,flexWrap:"wrap"}}>
+          <span style={{fontSize:11,color:cat.color,background:`${cat.color}18`,padding:"2px 8px",borderRadius:10}}>{cat.label}</span>
+          <span style={{fontSize:11,color:ctx.color,background:`${ctx.color}18`,padding:"2px 8px",borderRadius:10}}>{ctx.label}</span>
+          {item.dueDate&&<span style={{fontSize:11,padding:"2px 8px",borderRadius:10,color:overdue?"#FF6B6B":"#9A96B0",background:overdue?"#FF6B6B18":"#9A96B018"}}>{overdue?"기한초과 ":"예정 "}{item.dueDate}</span>}
+          <button onClick={()=>setExpanded(v=>!v)} style={{background:"none",border:"none",color:"#4A475A",cursor:"pointer",fontSize:11,marginLeft:"auto"}}>{expanded?"닫기":"편집"}</button>
+        </div>
+        {expanded&&<div style={{marginTop:10}}>
+          <div style={{fontSize:11,color:"#6B6880",marginBottom:6}}>분류 변경</div>
+          <div style={{display:"flex",gap:6,marginBottom:10}}>{Object.entries(CONTEXTS).map(([key,val])=><button key={key} onClick={()=>onContext(key)} style={{padding:"4px 10px",borderRadius:10,fontSize:11,cursor:"pointer",border:`1px solid ${item.context===key?val.color:"#2D2A3E"}`,background:item.context===key?`${val.color}22`:"transparent",color:item.context===key?val.color:"#6B6880"}}>{val.label}</button>)}</div>
+          <div style={{fontSize:11,color:"#6B6880",marginBottom:6}}>유형 변경</div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>{Object.entries(CATEGORIES).map(([key,val])=><button key={key} onClick={()=>onCategory(key)} style={{padding:"4px 10px",borderRadius:10,fontSize:11,cursor:"pointer",border:`1px solid ${item.category===key?val.color:"#2D2A3E"}`,background:item.category===key?`${val.color}22`:"transparent",color:item.category===key?val.color:"#6B6880"}}>{val.label}</button>)}</div>
+          <button onClick={onDelete} style={{padding:"4px 10px",borderRadius:10,fontSize:11,cursor:"pointer",border:"1px solid #FF6B6B",background:"transparent",color:"#FF6B6B"}}>삭제</button>
+        </div>}
+      </div>
+    </div>
+  </div>);
+}
+function CalendarScreen({items,onToggle,onDelete,onCategory,onContext,onOpenAdd}){
+  const today=new Date();
+  const[year,setYear]=useState(today.getFullYear());const[month,setMonth]=useState(today.getMonth());
+  const[selected,setSelected]=useState(toDateStr(today));const[tooltip,setTooltip]=useState(null);
+  const[ctxFilter,setCtxFilter]=useState("all");const[showDone,setShowDone]=useState(false);
+  const firstDOW=new Date(year,month,1).getDay();const daysInMonth=new Date(year,month+1,0).getDate();
+  const prevMonth=()=>{if(month===0){setMonth(11);setYear(y=>y-1);}else setMonth(m=>m-1);};
+  const nextMonth=()=>{if(month===11){setMonth(0);setYear(y=>y+1);}else setMonth(m=>m+1);};
+  const getDS=(d)=>`${year}-${String(month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  const itemsOn=(ds)=>items.filter(i=>i.dueDate===ds);
+  const selectedItems=itemsOn(selected).filter(i=>ctxFilter==="all"||i.context===ctxFilter).filter(i=>showDone||!i.done);
+  const allSel=itemsOn(selected);const holiday=KR_HOLIDAYS[selected];
+  const WDAYS=["일","월","화","수","목","금","토"];
+  const getDayColor=(day,ds)=>{const dow=new Date(year,month,day).getDay();if(KR_HOLIDAYS[ds])return"#FF6B6B";if(dow===0)return"#FF6B6B";if(dow===6)return"#6B9EF7";return"#C4C0D8";};
+  return(<div style={{paddingBottom:90}}>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"20px 20px 12px"}}>
+      <button onClick={prevMonth} style={{background:"none",border:"none",color:"#9A96B0",fontSize:24,cursor:"pointer",padding:"4px 8px"}}>‹</button>
+      <div style={{textAlign:"center"}}><div style={{fontSize:18,fontWeight:700,color:"#E8E6F0"}}>{year}년 {month+1}월</div>{KR_HOLIDAYS[toDateStr(today)]&&<div style={{fontSize:11,color:"#FF6B6B",marginTop:2}}>{KR_HOLIDAYS[toDateStr(today)]}</div>}</div>
+      <button onClick={nextMonth} style={{background:"none",border:"none",color:"#9A96B0",fontSize:24,cursor:"pointer",padding:"4px 8px"}}>›</button>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",padding:"0 12px",marginBottom:4}}>
+      {WDAYS.map((d,i)=><div key={d} style={{textAlign:"center",fontSize:11,fontWeight:600,padding:"4px 0",color:i===0?"#FF6B6B":i===6?"#6B9EF7":"#6B6880"}}>{d}</div>)}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",padding:"0 12px",gap:1}}>
+      {Array(firstDOW).fill(null).map((_,i)=><div key={"e"+i}/>)}
+      {Array(daysInMonth).fill(null).map((_,i)=>{
+        const day=i+1,ds=getDS(day),dayItems=itemsOn(ds),isSelected=selected===ds,isTodayCell=ds===toDateStr(today),isHoliday=!!KR_HOLIDAYS[ds],dayColor=getDayColor(day,ds),doneCount=dayItems.filter(x=>x.done).length;
+        return(<div key={day} onClick={()=>setSelected(ds)} onMouseEnter={()=>isHoliday&&setTooltip({ds,name:KR_HOLIDAYS[ds]})} onMouseLeave={()=>setTooltip(null)} style={{borderRadius:10,padding:"6px 2px 8px",cursor:"pointer",textAlign:"center",background:isSelected?"#4F8EF722":"transparent",border:isTodayCell?"1px solid #4F8EF7":"1px solid transparent",position:"relative",minHeight:52}}>
+          <div style={{fontSize:13,fontWeight:isTodayCell||isHoliday?700:400,color:isSelected?"#FFFFFF":dayColor}}>{day}</div>
+          {isHoliday&&<div style={{width:4,height:4,borderRadius:"50%",background:"#FF6B6B",margin:"2px auto 1px"}}/>}
+          {dayItems.length>0&&<div style={{display:"flex",justifyContent:"center",gap:2,marginTop:isHoliday?1:4,flexWrap:"wrap"}}>{dayItems.slice(0,3).map(item=><div key={item.id} style={{width:5,height:5,borderRadius:"50%",background:item.done?"#3D3A50":CATEGORIES[item.category].color}}/>)}</div>}
+          {dayItems.length>0&&doneCount===dayItems.length&&<div style={{fontSize:9,color:"#34D399",marginTop:2}}>완료</div>}
+          {tooltip&&tooltip.ds===ds&&<div style={{position:"absolute",bottom:"calc(100% + 4px)",left:"50%",transform:"translateX(-50%)",background:"#2D2A3E",color:"#E8E6F0",fontSize:10,padding:"4px 8px",borderRadius:6,whiteSpace:"nowrap",zIndex:10,pointerEvents:"none"}}>{tooltip.name}</div>}
+        </div>);
+      })}
+    </div>
+    <div style={{height:1,background:"#1E1C2A",margin:"16px 0 0"}}/>
+    <div style={{padding:"14px 20px 10px",display:"flex",alignItems:"center",gap:8}}>
+      <span style={{fontSize:14,fontWeight:600,color:"#E8E6F0"}}>{selected}</span>
+      {holiday&&<span style={{fontSize:11,color:"#FF6B6B",background:"#FF6B6B18",padding:"2px 8px",borderRadius:10}}>{holiday}</span>}
+      <span style={{fontSize:12,color:"#4A475A",marginLeft:"auto"}}>예정 {allSel.length}개</span>
+    </div>
+    <div style={{padding:"0 20px 12px",display:"flex",gap:8,alignItems:"center"}}>
+      {[["all","전체","#6B6880"],["work","업무",CONTEXTS.work.color],["life","일상",CONTEXTS.life.color]].map(([key,label,color])=><button key={key} onClick={()=>setCtxFilter(key)} style={{padding:"5px 14px",borderRadius:20,fontSize:12,cursor:"pointer",border:`1px solid ${ctxFilter===key?color:"#2D2A3E"}`,background:ctxFilter===key?`${color}22`:"transparent",color:ctxFilter===key?color:"#6B6880"}}>{label}</button>)}
+      <button onClick={()=>setShowDone(v=>!v)} style={{padding:"5px 12px",borderRadius:20,fontSize:12,cursor:"pointer",border:"1px solid #2D2A3E",background:"transparent",color:showDone?"#34D399":"#4A475A",marginLeft:"auto"}}>완료 {showDone?"숨김":"보기"}</button>
+    </div>
+    <div style={{padding:"0 20px",display:"flex",flexDirection:"column",gap:10}}>
+      {selectedItems.length===0&&<div style={{textAlign:"center",color:"#4A475A",fontSize:13,padding:"24px 0"}}>{allSel.length===0?"이 날 예정된 항목이 없습니다.":"해당 조건의 항목이 없습니다."}</div>}
+      {selectedItems.map(item=><ItemCard key={item.id} item={item} onToggle={()=>onToggle(item.id)} onDelete={()=>onDelete(item.id)} onCategory={cat=>onCategory(item.id,cat)} onContext={ctx=>onContext(item.id,ctx)}/>)}
+    </div>
+    <div style={{padding:"16px 20px 0",textAlign:"center"}}><button onClick={onOpenAdd} style={{padding:"10px 28px",borderRadius:20,border:"1px solid #4F8EF7",background:"#4F8EF722",color:"#4F8EF7",fontSize:13,cursor:"pointer"}}>{selected}에 항목 추가</button></div>
+  </div>);
+}
+function ListScreen({items,onToggle,onDelete,onCategory,onContext}){
+  const[timeTab,setTimeTab]=useState("today");const[ctxTab,setCtxTab]=useState("all");const[filter,setFilter]=useState("all");const[showDone,setShowDone]=useState(false);
+  const todayItems=items.filter(i=>isToday(i.createdAt));const baseItems=timeTab==="today"?todayItems:items;
+  const displayItems=baseItems.filter(i=>ctxTab==="all"||i.context===ctxTab).filter(i=>filter==="all"||i.category===filter).filter(i=>showDone||!i.done);
+  const todayDone=todayItems.filter(i=>i.done).length;const todayTotal=todayItems.length;
+  return(<div style={{padding:"20px 0 90px"}}>
+    <div style={{padding:"0 20px 16px"}}><div style={{background:"#1E1C2A",borderRadius:14,padding:"14px 16px"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><span style={{fontSize:13,color:"#9A96B0"}}>오늘 완료</span><span style={{fontSize:13,fontWeight:600,color:"#4F8EF7"}}>{todayDone} / {todayTotal}</span></div><div style={{height:4,background:"#2D2A3E",borderRadius:4,overflow:"hidden"}}><div style={{height:"100%",borderRadius:4,transition:"width 0.4s ease",width:todayTotal>0?`${(todayDone/todayTotal)*100}%`:"0%",background:"linear-gradient(90deg,#4F8EF7,#A78BFA)"}}/></div></div></div>
+    <div style={{padding:"0 20px 10px",display:"flex",gap:8,alignItems:"center"}}>
+      {[["today","오늘"],["all","전체"]].map(([key,label])=><button key={key} onClick={()=>setTimeTab(key)} style={{padding:"6px 16px",borderRadius:20,border:"none",cursor:"pointer",fontSize:13,fontWeight:timeTab===key?600:400,background:timeTab===key?"#4F8EF7":"#1E1C2A",color:timeTab===key?"#fff":"#6B6880"}}>{label}</button>)}
+      <button onClick={()=>setShowDone(v=>!v)} style={{padding:"6px 14px",borderRadius:20,border:"1px solid #2D2A3E",cursor:"pointer",fontSize:13,background:"transparent",color:showDone?"#34D399":"#4A475A",marginLeft:"auto"}}>완료 {showDone?"숨기기":"보기"}</button>
+    </div>
+    <div style={{padding:"0 20px 10px",display:"flex",gap:8}}>
+      {[["all","전체","#6B6880"],["work","업무",CONTEXTS.work.color],["life","일상",CONTEXTS.life.color]].map(([key,label,color])=><button key={key} onClick={()=>setCtxTab(key)} style={{padding:"6px 16px",borderRadius:20,border:"none",cursor:"pointer",fontSize:13,fontWeight:ctxTab===key?600:400,background:ctxTab===key?color:"#1E1C2A",color:ctxTab===key?"#fff":"#6B6880"}}>{label}</button>)}
+    </div>
+    <div style={{padding:"0 20px 16px",display:"flex",gap:6,overflowX:"auto"}}>
+      {[["all","전체","#4A475A"],...Object.entries(CATEGORIES).map(([k,v])=>[k,v.label,v.color])].map(([key,label,color])=><button key={key} onClick={()=>setFilter(key)} style={{padding:"5px 14px",borderRadius:20,fontSize:12,cursor:"pointer",whiteSpace:"nowrap",border:`1px solid ${filter===key?color:"#2D2A3E"}`,background:filter===key?`${color}22`:"transparent",color:filter===key?color:"#6B6880"}}>{label}</button>)}
+    </div>
+    <div style={{padding:"0 20px",display:"flex",flexDirection:"column",gap:10}}>
+      {displayItems.length===0&&<div style={{textAlign:"center",color:"#4A475A",fontSize:14,padding:"40px 0"}}>아직 아무것도 없습니다.</div>}
+      {displayItems.map(item=><ItemCard key={item.id} item={item} onToggle={()=>onToggle(item.id)} onDelete={()=>onDelete(item.id)} onCategory={cat=>onCategory(item.id,cat)} onContext={ctx=>onContext(item.id,ctx)}/>)}
+    </div>
+    {timeTab==="today"&&<div style={{padding:"20px 20px 0"}}><div style={{background:"#1E1C2A",borderRadius:14,padding:"14px 16px",borderLeft:"3px solid #A78BFA"}}><div style={{fontSize:12,color:"#6B6880",marginBottom:6}}>오늘 요약</div><div style={{fontSize:13,color:"#C4C0D8",lineHeight:1.8}}>업무 {todayItems.filter(i=>i.context==="work").length}개 · 일상 {todayItems.filter(i=>i.context==="life").length}개<br/>할 일 {todayItems.filter(i=>i.category==="todo").length}개 · 메모 {todayItems.filter(i=>i.category==="memo").length}개 · 리마인더 {todayItems.filter(i=>i.category==="reminder").length}개<br/>완료 {todayDone}개 · 남음 {todayTotal-todayDone}개</div></div></div>}
+  </div>);
+}
+function App(){
+  const[items,setItems]=useState(loadItems);const[screen,setScreen]=useState("calendar");const[showModal,setShowModal]=useState(false);const[input,setInput]=useState("");
+  const{listening,supported,toggle}=useSpeech((t)=>setInput(prev=>prev?prev+" "+t:t));
+  useEffect(()=>{saveItems(items);},[items]);
+  const addItem=(newItem)=>setItems(prev=>[newItem,...prev]);
+  const quickAdd=()=>{if(!input.trim())return;addItem({id:Date.now(),text:input.trim(),category:classifyInput(input),context:classifyContext(input),dueDate:null,done:false,createdAt:new Date().toISOString()});setInput("");};
+  const toggleDone=id=>setItems(prev=>prev.map(i=>i.id===id?{...i,done:!i.done}:i));
+  const deleteItem=id=>setItems(prev=>prev.filter(i=>i.id!==id));
+  const changeCategory=(id,c)=>setItems(prev=>prev.map(i=>i.id===id?{...i,category:c}:i));
+  const changeContext=(id,c)=>setItems(prev=>prev.map(i=>i.id===id?{...i,context:c}:i));
+  const now=new Date();const weekdays=["일","월","화","수","목","금","토"];const todayHoliday=KR_HOLIDAYS[toDateStr(now)];
+  return(<div style={{minHeight:"100vh",background:"#0F0F13"}}>
+    <div style={{padding:"24px 20px 12px",background:"linear-gradient(180deg,#1A1825 0%,#0F0F13 100%)"}}>
+      <div style={{fontSize:12,color:"#6B6880",letterSpacing:1}}>{now.getFullYear()}년 {now.getMonth()+1}월 {now.getDate()}일 {weekdays[now.getDay()]}요일{todayHoliday&&<span style={{color:"#FF6B6B",marginLeft:8}}>{todayHoliday}</span>}</div>
+      <div style={{fontSize:20,fontWeight:700,color:"#FFFFFF",marginTop:2}}>안녕하세요, 수연님</div>
+      <div style={{marginTop:14,background:"#1E1C2A",borderRadius:16,padding:"4px 4px 4px 14px",display:"flex",alignItems:"center",gap:6,border:"1px solid #2D2A3E"}}>
+        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&quickAdd()} placeholder="빠른 입력..." style={{flex:1,background:"transparent",border:"none",outline:"none",color:"#E8E6F0",fontSize:14,padding:"8px 0"}}/>
+        {supported&&<button onClick={toggle} className={listening?"mic-pulse":""} style={{width:34,height:34,borderRadius:"50%",border:"none",cursor:"pointer",background:listening?"#FF6B6B":"#2D2A3E",color:"#fff",fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{listening?"⏹":"🎤"}</button>}
+        <button onClick={()=>setShowModal(true)} style={{background:"#2D2A3E",border:"none",borderRadius:10,color:"#9A96B0",fontSize:11,padding:"0 10px",height:34,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>날짜 지정</button>
+        <button onClick={quickAdd} style={{background:"linear-gradient(135deg,#4F8EF7,#A78BFA)",border:"none",borderRadius:12,color:"#fff",fontSize:18,width:34,height:34,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>+</button>
+      </div>
+      {listening&&<div style={{fontSize:11,color:"#FF6B6B",marginTop:6,paddingLeft:4}}>음성 인식 중... 말씀해 주세요</div>}
+    </div>
+    {screen==="calendar"?<CalendarScreen items={items} onToggle={toggleDone} onDelete={deleteItem} onCategory={changeCategory} onContext={changeContext} onOpenAdd={()=>setShowModal(true)}/>:<ListScreen items={items} onToggle={toggleDone} onDelete={deleteItem} onCategory={changeCategory} onContext={changeContext}/>}
+    <nav className="bottom-nav">
+      <button className={`nav-btn ${screen==="calendar"?"active":""}`} onClick={()=>setScreen("calendar")}><span className="nav-icon">📅</span>달력</button>
+      <button className={`nav-btn ${screen==="list"?"active":""}`} onClick={()=>setScreen("list")}><span className="nav-icon">📋</span>목록</button>
+    </nav>
+    {showModal&&<AddModal onClose={()=>setShowModal(false)} onAdd={addItem}/>}
+  </div>);
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
